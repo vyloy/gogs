@@ -26,6 +26,7 @@ import (
 	"github.com/gogits/gogs/routers"
 	"github.com/gogits/gogs/routers/admin"
 	"github.com/gogits/gogs/routers/api/v1"
+	"github.com/gogits/gogs/routers/debug"
 	"github.com/gogits/gogs/routers/dev"
 	"github.com/gogits/gogs/routers/org"
 	"github.com/gogits/gogs/routers/repo"
@@ -57,8 +58,8 @@ func newMartini() *martini.ClassicMartini {
 	m := martini.New()
 	m.Use(middleware.Logger())
 	m.Use(martini.Recovery())
-	m.Use(martini.Static(path.Join(setting.StaticRootPath, "public"),
-		martini.StaticOptions{SkipLogging: !setting.DisableRouterLog}))
+	m.Use(middleware.Static("public",
+		middleware.StaticOptions{SkipLogging: !setting.DisableRouterLog}))
 	m.MapTo(r, (*martini.Routes)(nil))
 	m.Action(r.Handle)
 	return &martini.ClassicMartini{m, r}
@@ -96,7 +97,7 @@ func runWeb(*cli.Context) {
 		r.Get("/stars", user.Stars)
 	}, reqSignIn)
 
-	m.Group("/api", func(r martini.Router) {
+	m.Group("/api", func(_ martini.Router) {
 		m.Group("/v1", func(r martini.Router) {
 			// Miscellaneous.
 			r.Post("/markdown", bindIgnErr(apiv1.MarkdownForm{}), v1.Markdown)
@@ -162,8 +163,9 @@ func runWeb(*cli.Context) {
 	m.Group("/admin", func(r martini.Router) {
 		r.Get("/users", admin.Users)
 		r.Get("/repos", admin.Repositories)
-		r.Get("/config", admin.Config)
 		r.Get("/auths", admin.Auths)
+		r.Get("/config", admin.Config)
+		r.Get("/monitor", admin.Monitor)
 	}, adminReq)
 	m.Group("/admin/users", func(r martini.Router) {
 		r.Get("/new", admin.NewUser)
@@ -185,11 +187,26 @@ func runWeb(*cli.Context) {
 		m.Get("/template/**", dev.TemplatePreview)
 	}
 
-	reqOwner := middleware.RequireOwner()
+	reqTrueOwner := middleware.RequireTrueOwner()
 
-	m.Group("/o", func(r martini.Router) {
-		r.Get("/:org", org.Organization)
-	})
+	m.Group("/org", func(r martini.Router) {
+		r.Get("/create", org.New)
+		r.Post("/create", bindIgnErr(auth.CreateOrgForm{}), org.NewPost)
+		r.Get("/:org", org.Home)
+		r.Get("/:org/dashboard", org.Dashboard)
+		r.Get("/:org/members", org.Members)
+
+		r.Get("/:org/teams", org.Teams)
+		r.Get("/:org/teams/new", org.NewTeam)
+		r.Post("/:org/teams/new", bindIgnErr(auth.CreateTeamForm{}), org.NewTeamPost)
+		r.Get("/:org/teams/:team/edit", org.EditTeam)
+
+		r.Get("/:org/settings", org.Settings)
+		r.Post("/:org/settings", bindIgnErr(auth.OrgSettingForm{}), org.SettingsPost)
+		r.Post("/:org/settings/delete", org.DeletePost)
+	}, reqSignIn)
+
+	debug.RegisterRoutes(m)
 
 	m.Group("/:username/:reponame", func(r martini.Router) {
 		r.Get("/settings", repo.Setting)
@@ -204,7 +221,7 @@ func runWeb(*cli.Context) {
 			r.Get("/hooks/:id", repo.WebHooksEdit)
 			r.Post("/hooks/:id", bindIgnErr(auth.NewWebhookForm{}), repo.WebHooksEditPost)
 		})
-	}, reqSignIn, middleware.RepoAssignment(true), reqOwner)
+	}, reqSignIn, middleware.RepoAssignment(true), reqTrueOwner)
 
 	m.Group("/:username/:reponame", func(r martini.Router) {
 		r.Get("/action/:action", repo.Action)
@@ -228,11 +245,13 @@ func runWeb(*cli.Context) {
 		})
 
 		r.Post("/comment/:action", repo.Comment)
-		r.Get("/releases/new", repo.ReleasesNew)
+		r.Get("/releases/new", repo.NewRelease)
+		r.Get("/releases/edit/:tagname", repo.EditRelease)
 	}, reqSignIn, middleware.RepoAssignment(true))
 
 	m.Group("/:username/:reponame", func(r martini.Router) {
-		r.Post("/releases/new", bindIgnErr(auth.NewReleaseForm{}), repo.ReleasesNewPost)
+		r.Post("/releases/new", bindIgnErr(auth.NewReleaseForm{}), repo.NewReleasePost)
+		r.Post("/releases/edit/:tagname", bindIgnErr(auth.EditReleaseForm{}), repo.EditReleasePost)
 	}, reqSignIn, middleware.RepoAssignment(true, true))
 
 	m.Group("/:username/:reponame", func(r martini.Router) {

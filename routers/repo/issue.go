@@ -22,6 +22,16 @@ import (
 	"github.com/gogits/gogs/modules/setting"
 )
 
+const (
+	ISSUES       base.TplName = "repo/issue/list"
+	ISSUE_CREATE base.TplName = "repo/issue/create"
+	ISSUE_VIEW   base.TplName = "repo/issue/view"
+
+	MILESTONE      base.TplName = "repo/issue/milestone"
+	MILESTONE_NEW  base.TplName = "repo/issue/milestone_new"
+	MILESTONE_EDIT base.TplName = "repo/issue/milestone_edit"
+)
+
 func Issues(ctx *middleware.Context) {
 	ctx.Data["Title"] = "Issues"
 	ctx.Data["IsRepoToolbarIssues"] = true
@@ -134,7 +144,7 @@ func Issues(ctx *middleware.Context) {
 	} else {
 		ctx.Data["ShowCount"] = issueStats.OpenCount
 	}
-	ctx.HTML(200, "issue/list")
+	ctx.HTML(200, ISSUES)
 }
 
 func CreateIssue(ctx *middleware.Context, params martini.Params) {
@@ -161,7 +171,7 @@ func CreateIssue(ctx *middleware.Context, params martini.Params) {
 		return
 	}
 	ctx.Data["Collaborators"] = us
-	ctx.HTML(200, "issue/create")
+	ctx.HTML(200, ISSUE_CREATE)
 }
 
 func CreateIssuePost(ctx *middleware.Context, params martini.Params, form auth.CreateIssueForm) {
@@ -190,7 +200,7 @@ func CreateIssuePost(ctx *middleware.Context, params martini.Params, form auth.C
 	ctx.Data["Collaborators"] = us
 
 	if ctx.HasError() {
-		ctx.HTML(200, "issue/create")
+		ctx.HTML(200, ISSUE_CREATE)
 		return
 	}
 
@@ -250,7 +260,7 @@ func CreateIssuePost(ctx *middleware.Context, params martini.Params, form auth.C
 	}
 
 	// Mail watchers and mentions.
-	if setting.Service.NotifyMail {
+	if setting.Service.EnableNotifyMail {
 		tos, err := mailer.SendIssueNotifyMail(ctx.User, ctx.Repo.Owner, ctx.Repo.Repository, issue)
 		if err != nil {
 			ctx.Handle(500, "issue.CreateIssue(SendIssueNotifyMail)", err)
@@ -392,7 +402,7 @@ func ViewIssue(ctx *middleware.Context, params martini.Params) {
 	ctx.Data["IsIssueOwner"] = ctx.Repo.IsOwner || (ctx.IsSigned && issue.PosterId == ctx.User.Id)
 	ctx.Data["IsRepoToolbarIssues"] = true
 	ctx.Data["IsRepoToolbarIssuesList"] = false
-	ctx.HTML(200, "issue/view")
+	ctx.HTML(200, ISSUE_VIEW)
 }
 
 func UpdateIssue(ctx *middleware.Context, params martini.Params, form auth.CreateIssueForm) {
@@ -677,15 +687,23 @@ func Comment(ctx *middleware.Context, params martini.Params) {
 	}
 
 	// Notify watchers.
-	if err = models.NotifyWatchers(&models.Action{ActUserId: ctx.User.Id, ActUserName: ctx.User.Name, ActEmail: ctx.User.Email,
-		OpType: models.OP_COMMENT_ISSUE, Content: fmt.Sprintf("%d|%s", issue.Index, strings.Split(content, "\n")[0]),
-		RepoId: ctx.Repo.Repository.Id, RepoName: ctx.Repo.Repository.Name, RefName: ""}); err != nil {
+	act := &models.Action{
+		ActUserId:    ctx.User.Id,
+		ActUserName:  ctx.User.LowerName,
+		ActEmail:     ctx.User.Email,
+		OpType:       models.OP_COMMENT_ISSUE,
+		Content:      fmt.Sprintf("%d|%s", issue.Index, strings.Split(content, "\n")[0]),
+		RepoId:       ctx.Repo.Repository.Id,
+		RepoUserName: ctx.Repo.Owner.LowerName,
+		RepoName:     ctx.Repo.Repository.LowerName,
+	}
+	if err = models.NotifyWatchers(act); err != nil {
 		ctx.Handle(500, "issue.CreateIssue(NotifyWatchers)", err)
 		return
 	}
 
 	// Mail watchers and mentions.
-	if setting.Service.NotifyMail {
+	if setting.Service.EnableNotifyMail {
 		issue.Content = content
 		tos, err := mailer.SendIssueNotifyMail(ctx.User, ctx.Repo.Owner, ctx.Repo.Repository, issue)
 		if err != nil {
@@ -794,20 +812,25 @@ func Milestones(ctx *middleware.Context) {
 	} else {
 		ctx.Data["State"] = "open"
 	}
-	ctx.HTML(200, "issue/milestone")
+	ctx.HTML(200, MILESTONE)
 }
 
 func NewMilestone(ctx *middleware.Context) {
 	ctx.Data["Title"] = "New Milestone"
 	ctx.Data["IsRepoToolbarIssues"] = true
 	ctx.Data["IsRepoToolbarIssuesList"] = true
-	ctx.HTML(200, "issue/milestone_new")
+	ctx.HTML(200, MILESTONE_NEW)
 }
 
 func NewMilestonePost(ctx *middleware.Context, form auth.CreateMilestoneForm) {
 	ctx.Data["Title"] = "New Milestone"
 	ctx.Data["IsRepoToolbarIssues"] = true
 	ctx.Data["IsRepoToolbarIssuesList"] = true
+
+	if ctx.HasError() {
+		ctx.HTML(200, MILESTONE_NEW)
+		return
+	}
 
 	var deadline time.Time
 	var err error
@@ -890,7 +913,7 @@ func UpdateMilestone(ctx *middleware.Context, params martini.Params) {
 	}
 	ctx.Data["Milestone"] = mile
 
-	ctx.HTML(200, "issue/milestone_edit")
+	ctx.HTML(200, MILESTONE_EDIT)
 }
 
 func UpdateMilestonePost(ctx *middleware.Context, params martini.Params, form auth.CreateMilestoneForm) {
@@ -911,6 +934,11 @@ func UpdateMilestonePost(ctx *middleware.Context, params martini.Params, form au
 		} else {
 			ctx.Handle(500, "issue.UpdateMilestonePost(GetMilestoneByIndex)", err)
 		}
+		return
+	}
+
+	if ctx.HasError() {
+		ctx.HTML(200, MILESTONE_EDIT)
 		return
 	}
 

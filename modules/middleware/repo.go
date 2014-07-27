@@ -21,44 +21,40 @@ import (
 
 func RepoAssignment(redirect bool, args ...bool) martini.Handler {
 	return func(ctx *Context, params martini.Params) {
-		log.Trace(fmt.Sprint(args))
 		// valid brachname
 		var validBranch bool
 		// display bare quick start if it is a bare repo
 		var displayBare bool
 
 		if len(args) >= 1 {
-			// Note: argument has wrong value in Go1.3 martini.
-			// validBranch = args[0]
-			validBranch = true
+			validBranch = args[0]
 		}
 
 		if len(args) >= 2 {
-			// displayBare = args[1]
-			displayBare = true
+			displayBare = args[1]
 		}
 
 		var (
-			user        *models.User
-			err         error
-			isTrueOwner bool
+			user *models.User
+			err  error
 		)
 
 		userName := params["username"]
 		repoName := params["reponame"]
 		refName := params["branchname"]
 
+		// TODO: need more advanced onwership and access level check.
 		// Collaborators who have write access can be seen as owners.
 		if ctx.IsSigned {
-			ctx.Repo.IsOwner, err = models.HasAccess(ctx.User.Name, userName+"/"+repoName, models.AU_WRITABLE)
+			ctx.Repo.IsOwner, err = models.HasAccess(ctx.User.Name, userName+"/"+repoName, models.WRITABLE)
 			if err != nil {
 				ctx.Handle(500, "RepoAssignment(HasAccess)", err)
 				return
 			}
-			isTrueOwner = ctx.User.LowerName == strings.ToLower(userName)
+			ctx.Repo.IsTrueOwner = ctx.User.LowerName == strings.ToLower(userName)
 		}
 
-		if !isTrueOwner {
+		if !ctx.Repo.IsTrueOwner {
 			user, err = models.GetUserByName(userName)
 			if err != nil {
 				if err == models.ErrUserNotExist {
@@ -84,6 +80,11 @@ func RepoAssignment(redirect bool, args ...bool) martini.Handler {
 			return
 		}
 		ctx.Repo.Owner = user
+
+		// Organization owner team members are true owners as well.
+		if ctx.Repo.Owner.IsOrganization() && ctx.Repo.Owner.IsOrgOwner(ctx.User.Id) {
+			ctx.Repo.IsTrueOwner = true
+		}
 
 		// get repository
 		repo, err := models.GetRepositoryByName(user.Id, repoName)
@@ -111,7 +112,7 @@ func RepoAssignment(redirect bool, args ...bool) martini.Handler {
 				return
 			}
 
-			hasAccess, err := models.HasAccess(ctx.User.Name, ctx.Repo.Owner.Name+"/"+repo.Name, models.AU_READABLE)
+			hasAccess, err := models.HasAccess(ctx.User.Name, ctx.Repo.Owner.Name+"/"+repo.Name, models.READABLE)
 			if err != nil {
 				ctx.Handle(500, "RepoAssignment(HasAccess)", err)
 				return
@@ -157,6 +158,7 @@ func RepoAssignment(redirect bool, args ...bool) martini.Handler {
 		ctx.Data["Owner"] = user
 		ctx.Data["RepoLink"] = ctx.Repo.RepoLink
 		ctx.Data["IsRepositoryOwner"] = ctx.Repo.IsOwner
+		ctx.Data["IsRepositoryTrueOwner"] = ctx.Repo.IsTrueOwner
 		ctx.Data["BranchName"] = ""
 
 		if setting.SshPort != 22 {
@@ -188,16 +190,16 @@ func RepoAssignment(redirect bool, args ...bool) martini.Handler {
 					ctx.Repo.CommitId = ctx.Repo.Commit.Id.String()
 
 				} else if gitRepo.IsTagExist(refName) {
-					ctx.Repo.IsBranch = true
+					ctx.Repo.IsTag = true
 					ctx.Repo.BranchName = refName
 
-					ctx.Repo.Commit, err = gitRepo.GetCommitOfTag(refName)
+					ctx.Repo.Tag, err = gitRepo.GetTag(refName)
 					if err != nil {
 						ctx.Handle(404, "RepoAssignment invalid tag", nil)
 						return
 					}
+					ctx.Repo.Commit, _ = ctx.Repo.Tag.Commit()
 					ctx.Repo.CommitId = ctx.Repo.Commit.Id.String()
-
 				} else if len(refName) == 40 {
 					ctx.Repo.IsCommit = true
 					ctx.Repo.CommitId = refName
@@ -247,6 +249,7 @@ func RepoAssignment(redirect bool, args ...bool) martini.Handler {
 		}
 
 		ctx.Data["BranchName"] = ctx.Repo.BranchName
+		ctx.Data["TagName"] = ctx.Repo.TagName
 		brs, err := ctx.Repo.GitRepo.GetBranches()
 		if err != nil {
 			log.Error("RepoAssignment(GetBranches): %v", err)
@@ -257,9 +260,9 @@ func RepoAssignment(redirect bool, args ...bool) martini.Handler {
 	}
 }
 
-func RequireOwner() martini.Handler {
+func RequireTrueOwner() martini.Handler {
 	return func(ctx *Context) {
-		if !ctx.Repo.IsOwner {
+		if !ctx.Repo.IsTrueOwner {
 			if !ctx.IsSigned {
 				ctx.SetCookie("redirect_to", "/"+url.QueryEscape(ctx.Req.RequestURI))
 				ctx.Redirect("/user/login")
